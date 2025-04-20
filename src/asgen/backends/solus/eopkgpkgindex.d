@@ -1,0 +1,442 @@
+/*
+ * Copyright (C) 2025 Solus Developers <copyright@getsol.us>
+ *
+ * Licensed under the GNU Lesser General Public License Version 3
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the license, or
+ * (at your option) any later version.
+ *
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this software.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+module asgen.backends.solus.eopkgpkgindex;
+
+import std.stdio;
+import std.path : buildPath, baseName, dirName, extension;
+import std.array : appender, empty;
+import std.string : format, endsWith;
+import std.algorithm : canFind, startsWith, endsWith;
+import std.conv : to;
+static import std.file;
+
+import asgen.logging;
+import asgen.config;
+import asgen.utils : escapeXml, getTextFileContents, isRemote;
+import asgen.zarchive : ArchiveDecompressor, decompressFile;
+
+// Use selective imports for dxml to avoid naming conflicts with asgen.config.Config
+import dxml.dom : DOMEntity, parseDOM, simpleXML, EntityType;
+
+import asgen.backends.interfaces;
+import asgen.backends.solus.eopkgpkg;
+
+/**
+ * Index implementation for Solus eopkg packages.
+ * The eopkg index is an XML file that lists all packages in a repository.
+ */
+final class EopkgPackageIndex : PackageIndex
+{
+
+private:
+    string rootDir;
+    Package[][string] pkgCache;
+    string tmpRootDir;
+
+public:
+
+    this(string dir)
+    {
+        this.rootDir = dir;
+        if (!dir.isRemote && !std.file.exists(dir))
+            throw new Exception(format("Directory '%s' does not exist.", dir));
+
+        auto conf = Config.get();
+        tmpRootDir = buildPath(conf.getTmpDir, dir.baseName);
+    }
+
+    void release()
+    {
+        pkgCache = null;
+    }
+
+    /**
+     * Download a file if it's remote, or return the local path if it's already local.
+     */
+    private string downloadIfNecessary(string fname, string tempDir = null)
+    {
+        import asgen.downloader : Downloader;
+
+        if (!fname.isRemote)
+            return fname;
+
+        if (tempDir.empty)
+        {
+            auto conf = Config.get();
+            tempDir = conf.getTmpDir();
+        }
+
+        if (!std.file.exists(tempDir))
+            std.file.mkdirRecurse(tempDir);
+
+        auto dl = Downloader.get;
+        immutable path = buildPath(tempDir, fname.baseName);
+        dl.downloadFile(fname, path);
+
+        return path;
+    }
+
+    /**
+     * Load packages from the eopkg repository index.
+     * In Solus, the index is contained in an eopkg-index.xml.xz file.
+     */
+    private EopkgPackage[] loadPackages(string suite, string section, string arch)
+    {
+        // Choose the appropriate index file based on local/remote access
+        string indexPath;
+
+        if (rootDir.isRemote)
+        {
+            // For remote repositories, prefer the compressed version to save bandwidth
+            indexPath = buildPath(rootDir, "eopkg-index.xml.xz");
+        }
+        else
+        {
+            // For local repositories, try the uncompressed version first
+            indexPath = buildPath(rootDir, "eopkg-index.xml");
+
+            // If the uncompressed file doesn't exist locally, try the compressed version
+            if (!std.file.exists(indexPath))
+                indexPath = buildPath(rootDir, "eopkg-index.xml.xz");
+        }
+
+        logDebug("Looking for index file at: %s", indexPath);
+
+        string indexFname;
+        synchronized (this)
+            indexFname = downloadIfNecessary(indexPath, tmpRootDir);
+
+        string indexContent;
+        if (indexFname.endsWith(".xz"))
+        {
+            indexContent = decompressFile(indexFname);
+        }
+        else
+        {
+            indexContent = cast(string) std.file.read(indexFname);
+        }
+
+        // Parse XML index file using dxml
+        auto doc = parseDOM!simpleXML(indexContent);
+        auto pkgsMap = appender!(EopkgPackage[]);
+
+        // Find PISI root element
+        auto pisiNode = findNode(doc, "PISI");
+        if (pisiNode == DOMEntity!string.init)
+        {
+            logError("Repository index does not contain a PISI root element");
+            return pkgsMap.data;
+        }
+
+        // Process all Package elements in the index
+        foreach (packageNode; findNodes(pisiNode, "Package"))
+        {
+            auto pkg = new EopkgPackage();
+
+            // Extract basic package information
+            auto nameNode = findNode(packageNode, "Name");
+            string currentPkgName;
+            if (nameNode != DOMEntity!string.init)
+            {
+                currentPkgName = nodeText(nameNode);
+            }
+            else
+            {
+                logWarning("Skipping package entry without a name.");
+                continue; // Cannot process without a name
+            }
+
+            // Skip -devel- and -dbginfo- packages
+            if (currentPkgName.canFind("-devel-") || currentPkgName.canFind("-dbginfo-"))
+            {
+                logDebug("Skipping development/debug package: %s", currentPkgName);
+                continue;
+            }
+
+            // Set the package name if it's not skipped
+            pkg.name = currentPkgName;
+
+            // Extract version information from history
+            auto historyNode = findNode(packageNode, "History");
+            if (historyNode != DOMEntity!string.init)
+            {
+                auto updateNode = findNode(historyNode, "Update");
+                if (updateNode != DOMEntity!string.init)
+                {
+                    auto versionNode = findNode(updateNode, "Version");
+                    if (versionNode != DOMEntity!string.init)
+                    {
+                        pkg.ver = nodeText(versionNode);
+                    }
+                }
+            }
+
+            // Set architecture
+            auto archNode = findNode(packageNode, "Architecture");
+            if (archNode != DOMEntity!string.init)
+            {
+                pkg.arch = nodeText(archNode);
+            }
+
+            // Get package filename
+            auto packageURINode = findNode(packageNode, "PackageURI");
+            if (packageURINode != DOMEntity!string.init)
+            {
+                auto packageURI = nodeText(packageURINode);
+
+                // The PackageURI in eopkg-index.xml contains the relative path to the package
+                // We need to preserve this path structure
+                auto pkgPath = buildPath(rootDir, packageURI);
+                pkg.filename = pkgPath;
+                logDebug("Package path: %s", pkgPath);
+            }
+
+            // Extract summary and description
+            foreach (summaryNode; findNodes(packageNode, "Summary"))
+            {
+                auto lang = getAttribute(summaryNode, "xml:lang", "en");
+                pkg.setSummary(nodeText(summaryNode), lang);
+            }
+
+            foreach (descNode; findNodes(packageNode, "Description"))
+            {
+                auto lang = getAttribute(descNode, "xml:lang", "en");
+                pkg.setDescription(nodeText(descNode), lang);
+            }
+
+            // Get maintainer information
+            auto sourceNode = findNode(packageNode, "Source");
+            if (sourceNode != DOMEntity!string.init)
+            {
+                auto packagerNode = findNode(sourceNode, "Packager");
+                if (packagerNode != DOMEntity!string.init)
+                {
+                    auto emailNode = findNode(packagerNode, "Email");
+                    if (emailNode != DOMEntity!string.init)
+                    {
+                        pkg.maintainer = nodeText(emailNode);
+                    }
+                    else
+                    {
+                        pkg.maintainer = "solus@getsol.us";
+                    }
+                }
+                else
+                {
+                    pkg.maintainer = "solus@getsol.us";
+                }
+            }
+            else
+            {
+                pkg.maintainer = "solus@getsol.us";
+            }
+
+            // We'll extract the file list when the package is opened
+
+            // Add the package to our list if it's valid
+            if (pkg.isValid)
+            {
+                pkgsMap ~= pkg;
+            }
+            else
+            {
+                logError("Found an invalid package entry for '%s' (name, architecture or version is missing)."
+                        ~ " Skipping it.", pkg.name);
+            }
+        }
+
+        return pkgsMap.data;
+    }
+
+    /**
+     * Find the first node with the given name in the document
+     */
+    private DOMEntity!string findNode(DOMEntity!string root, string name)
+    {
+        foreach (child; root.children)
+        {
+            if (child.type == EntityType.elementStart && child.name == name)
+                return child;
+        }
+        DOMEntity!string nullResult;
+        return nullResult;
+    }
+
+    /**
+     * Find all nodes with the given name in the document
+     */
+    private DOMEntity!string[] findNodes(DOMEntity!string root, string name)
+    {
+        auto result = appender!(DOMEntity!string[]);
+        foreach (child; root.children)
+        {
+            if (child.type == EntityType.elementStart && child.name == name)
+                result ~= child;
+        }
+        return result.data;
+    }
+
+    /**
+     * Get the text content of a node
+     */
+    private string nodeText(DOMEntity!string node)
+    {
+        foreach (child; node.children)
+        {
+            if (child.type == EntityType.text)
+                return child.text;
+        }
+        return "";
+    }
+
+    /**
+     * Get an attribute from a node with a default value
+     */
+    private string getAttribute(DOMEntity!string node, string name, string defaultValue)
+    {
+        foreach (attr; node.attributes)
+        {
+            if (attr.name == name)
+                return attr.value;
+        }
+        return defaultValue;
+    }
+
+    Package[] packagesFor(string suite, string section, string arch, bool withLongDescs = true)
+    {
+        immutable id = "%s-%s-%s".format(suite, section, arch);
+        if (id !in pkgCache)
+        {
+            auto pkgs = loadPackages(suite, section, arch);
+            synchronized (this)
+                pkgCache[id] = to!(Package[])(pkgs);
+        }
+
+        return pkgCache[id];
+    }
+
+    Package packageForFile(string fname, string suite = null, string section = null)
+    {
+        import std.path : extension;
+        import std.file : exists;
+
+        // Only handle .eopkg files
+        if (fname.extension != ".eopkg")
+            return null;
+
+        if (!std.file.exists(fname))
+            return null;
+
+        try
+        {
+            // Create a new package for this file
+            auto pkg = new EopkgPackage();
+            pkg.filename = fname;
+
+            // Extract metadata to populate fields
+            pkg.extractMetadata();
+
+            return pkg;
+        }
+        catch (Exception e)
+        {
+            logError("Failed to process package file '%s': %s", fname, e.msg);
+            return null;
+        }
+    }
+
+    bool hasChanges(DataStore dstore, string suite, string section, string arch)
+    {
+        import std.string : strip;
+        import std.array : split;
+        import std.json : JSONValue;
+
+        // Define the possible checksum file names
+        string sha1sumPath;
+        string localSha1sumPath;
+
+        // Determine the checksum file path based on remote/local access
+        if (rootDir.isRemote)
+        {
+            // For remote, we primarily check the compressed index's checksum
+            sha1sumPath = buildPath(rootDir, "eopkg-index.xml.xz.sha1sum");
+        }
+        else
+        {
+            // For local, try the uncompressed index's checksum first
+            sha1sumPath = buildPath(rootDir, "eopkg-index.xml.sha1sum");
+            // If that doesn't exist, check for the compressed one's checksum
+            if (!std.file.exists(sha1sumPath))
+                sha1sumPath = buildPath(rootDir, "eopkg-index.xml.xz.sha1sum");
+        }
+
+        logDebug("Using checksum file: %s", sha1sumPath);
+
+        try
+        {
+            // Download or read the checksum file contents
+            string[] lines = getTextFileContents(sha1sumPath);
+            if (lines.empty)
+            {
+                logWarning("Checksum file '%s' is empty or could not be read. Assuming changes.", sha1sumPath);
+                return true;
+            }
+
+            // The first line should contain the SHA1 sum
+            string currentSha1 = lines[0].strip.split[0]; // Take the first field (the sum)
+            if (currentSha1.empty)
+            {
+                logWarning("Could not parse SHA1 sum from '%s'. Assuming changes.", sha1sumPath);
+                return true;
+            }
+
+            // Get the previously stored SHA1 sum for this suite/section/arch
+            string cacheKey = "solus-sha1-%s-%s".format(section, arch);
+            auto storedSha1Json = dstore.getRepoInfo(suite, section, cacheKey);
+            string storedSha1;
+            if (!storedSha1Json.isNull)
+            {
+                storedSha1 = storedSha1Json.str;
+            }
+
+            // Compare the current SHA1 with the stored one
+            if (currentSha1 == storedSha1)
+            {
+                logDebug("Index checksum matches stored value (%s). No changes detected.", currentSha1);
+                return false; // Checksums match, no changes
+            }
+            else
+            {
+                logInfo("Index checksum changed (stored: %s, current: %s). Changes detected.",
+                    storedSha1.empty ? "(none)" : storedSha1, currentSha1);
+                // Checksums differ or no stored value, update the stored value
+                dstore.setRepoInfo(suite, section, cacheKey, JSONValue(currentSha1));
+                return true; // Changes detected
+            }
+        }
+        catch (Exception e)
+        {
+            // In case of any error (e.g., file not found, network error), assume changes
+            logWarning("Error checking checksum file '%s': %s. Assuming changes.", sha1sumPath, e
+                    .msg);
+            return true;
+        }
+    }
+}
