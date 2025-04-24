@@ -105,16 +105,16 @@ public:
         if (rootDir.isRemote)
         {
             // For remote repositories, prefer the compressed version to save bandwidth
-            indexPath = buildPath(rootDir, "eopkg-index.xml.xz");
+            indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
         }
         else
         {
             // For local repositories, try the uncompressed version first
-            indexPath = buildPath(rootDir, "eopkg-index.xml");
+            indexPath = buildPath(rootDir, suite, "eopkg-index.xml");
 
             // If the uncompressed file doesn't exist locally, try the compressed version
             if (!std.file.exists(indexPath))
-                indexPath = buildPath(rootDir, "eopkg-index.xml.xz");
+                indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
         }
 
         logDebug("Looking for index file at: %s", indexPath);
@@ -203,7 +203,7 @@ public:
 
                 // The PackageURI in eopkg-index.xml contains the relative path to the package
                 // We need to preserve this path structure
-                auto pkgPath = buildPath(rootDir, packageURI);
+                auto pkgPath = buildPath(rootDir, suite, packageURI);
                 pkg.filename = pkgPath;
                 logDebug("Package path: %s", pkgPath);
             }
