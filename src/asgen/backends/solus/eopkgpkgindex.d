@@ -374,9 +374,23 @@ public:
 
         auto indexPath = getIndexPath(rootDir, suite);
 
+        string indexFname;
+        synchronized (this)
+            indexFname = downloadIfNecessary(indexPath, tmpRootDir);
+
+        string indexContent;
+        if (indexFname.endsWith(".xz"))
+        {
+            indexContent = decompressFile(indexFname);
+        }
+        else
+        {
+            indexContent = cast(string) std.file.read(indexFname);
+        }
+
         SysTime mtime;
         SysTime atime;
-        std.file.getTimes(indexPath, atime, mtime);
+        std.file.getTimes(indexFname, atime, mtime);
         auto currentTime = mtime.toUnixTime();
 
         auto repoInfo = dstore.getRepoInfo(suite, section, arch);
@@ -388,18 +402,18 @@ public:
 
         if ("mtime" !in repoInfo.object)
         {
-            indexChanged[indexPath] = true;
+            indexChanged[indexFname] = true;
             return true;
         }
 
         auto pastTime = repoInfo["mtime"].integer;
         if (pastTime != currentTime)
         {
-            indexChanged[indexPath] = true;
+            indexChanged[indexFname] = true;
             return true;
         }
 
-        indexChanged[indexPath] = false;
+        indexChanged[indexFname] = false;
         return false;
     }
 }
