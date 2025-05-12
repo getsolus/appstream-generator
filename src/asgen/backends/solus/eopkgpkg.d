@@ -37,7 +37,7 @@ import dxml.dom : DOMEntity, parseDOM, simpleXML, EntityType;
 
 /**
  * Represents an eopkg package in the Solus distribution.
- * An eopkg package is an archive that contains metadata.xml and files.xml
+ * An eopkg package is a zip archive that contains metadata.xml and files.xml
  * describing the package, as well as an archive called install.tar.xz which contains the actual files.
  */
 final class EopkgPackage : Package
@@ -364,14 +364,6 @@ public:
 
         try
         {
-            // Check if this is a direct metadata file request (these are at the package root)
-            if (fname == "metadata.xml" || fname == "/metadata.xml" ||
-                fname == "files.xml" || fname == "/files.xml")
-            {
-                auto actualPath = fname.startsWith("/") ? fname[1 .. $] : fname;
-                return archive.readData(actualPath);
-            }
-
             // All other files are in install.tar.xz
             // We need to extract install.tar.xz and then read files from it
             import std.path : buildPath;
