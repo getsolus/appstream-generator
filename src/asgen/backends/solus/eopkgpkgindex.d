@@ -115,6 +115,20 @@ public:
         return indexPath;
     }
 
+    private string getIndexContent(string indexFname)
+    {
+        string indexContent;
+        if (indexFname.endsWith(".xz"))
+        {
+            indexContent = decompressFile(indexFname);
+        }
+        else
+        {
+            indexContent = cast(string) std.file.read(indexFname);
+        }
+        return indexContent;
+    }
+
     /**
      * Load packages from the eopkg repository index.
      * In Solus, the index is contained in an eopkg-index.xml.xz file.
@@ -127,15 +141,7 @@ public:
         synchronized (this)
             indexFname = downloadIfNecessary(indexPath, tmpRootDir);
 
-        string indexContent;
-        if (indexFname.endsWith(".xz"))
-        {
-            indexContent = decompressFile(indexFname);
-        }
-        else
-        {
-            indexContent = cast(string) std.file.read(indexFname);
-        }
+        auto indexContent = getIndexContent(indexFname);
 
         // Parse XML index file using dxml
         auto doc = parseDOM!simpleXML(indexContent);
@@ -378,15 +384,7 @@ public:
         synchronized (this)
             indexFname = downloadIfNecessary(indexPath, tmpRootDir);
 
-        string indexContent;
-        if (indexFname.endsWith(".xz"))
-        {
-            indexContent = decompressFile(indexFname);
-        }
-        else
-        {
-            indexContent = cast(string) std.file.read(indexFname);
-        }
+        auto indexContent = getIndexContent(indexFname);
 
         SysTime mtime;
         SysTime atime;
