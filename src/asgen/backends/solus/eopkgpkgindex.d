@@ -94,13 +94,8 @@ public:
         return path;
     }
 
-    /**
-     * Load packages from the eopkg repository index.
-     * In Solus, the index is contained in an eopkg-index.xml.xz file.
-     */
-    private EopkgPackage[] loadPackages(string suite, string section, string arch)
+    private string getIndexPath(string rootDir, string suite)
     {
-        // Choose the appropriate index file based on local/remote access
         string indexPath;
 
         if (rootDir.isRemote)
@@ -117,8 +112,16 @@ public:
             if (!std.file.exists(indexPath))
                 indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
         }
+        return indexPath;
+    }
 
-        logDebug("Looking for index file at: %s", indexPath);
+    /**
+     * Load packages from the eopkg repository index.
+     * In Solus, the index is contained in an eopkg-index.xml.xz file.
+     */
+    private EopkgPackage[] loadPackages(string suite, string section, string arch)
+    {
+        auto indexPath = getIndexPath(rootDir, suite);
 
         string indexFname;
         synchronized (this)
@@ -368,24 +371,7 @@ public:
         import std.json;
         import std.datetime : SysTime;
 
-        string indexPath;
-
-        if (rootDir.isRemote)
-        {
-            // For remote repositories, prefer the compressed version to save bandwidth
-            indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
-        }
-        else
-        {
-            // For local repositories, try the uncompressed version first
-            indexPath = buildPath(rootDir, suite, "eopkg-index.xml");
-
-            // If the uncompressed file doesn't exist locally, try the compressed version
-            if (!std.file.exists(indexPath))
-                indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
-        }
-
-        logDebug("Looking for index file at: %s", indexPath);
+        auto indexPath = getIndexPath(rootDir, suite);
 
         SysTime mtime;
         SysTime atime;
