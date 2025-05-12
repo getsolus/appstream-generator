@@ -167,8 +167,9 @@ public:
                 continue; // Cannot process without a name
             }
 
-            // Skip -devel- and -dbginfo- packages
-            if (currentPkgName.canFind("-devel-") || currentPkgName.canFind("-dbginfo-"))
+            // Optimization: Skip -devel and -dbginfo subpackages, they'll never contain anything
+            //               interesting.
+            if (currentPkgName.endsWith("-devel") || currentPkgName.endsWith("-dbginfo"))
             {
                 logDebug("Skipping development/debug package: %s", currentPkgName);
                 continue;
