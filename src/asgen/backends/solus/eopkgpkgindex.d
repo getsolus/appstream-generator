@@ -49,6 +49,7 @@ private:
     string rootDir;
     Package[][string] pkgCache;
     string tmpRootDir;
+    bool[string] indexChanged;
 
 public:
 
@@ -364,6 +365,54 @@ public:
 
     bool hasChanges(DataStore dstore, string suite, string section, string arch)
     {
-        return true;
+        import std.json;
+        import std.datetime : SysTime;
+
+        string indexPath;
+
+        if (rootDir.isRemote)
+        {
+            // For remote repositories, prefer the compressed version to save bandwidth
+            indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
+        }
+        else
+        {
+            // For local repositories, try the uncompressed version first
+            indexPath = buildPath(rootDir, suite, "eopkg-index.xml");
+
+            // If the uncompressed file doesn't exist locally, try the compressed version
+            if (!std.file.exists(indexPath))
+                indexPath = buildPath(rootDir, suite, "eopkg-index.xml.xz");
+        }
+
+        logDebug("Looking for index file at: %s", indexPath);
+
+        SysTime mtime;
+        SysTime atime;
+        std.file.getTimes(indexPath, atime, mtime);
+        auto currentTime = mtime.toUnixTime();
+
+        auto repoInfo = dstore.getRepoInfo(suite, section, arch);
+        scope (exit)
+        {
+            repoInfo.object["mtime"] = JSONValue(currentTime);
+            dstore.setRepoInfo(suite, section, arch, repoInfo);
+        }
+
+        if ("mtime" !in repoInfo.object)
+        {
+            indexChanged[indexPath] = true;
+            return true;
+        }
+
+        auto pastTime = repoInfo["mtime"].integer;
+        if (pastTime != currentTime)
+        {
+            indexChanged[indexPath] = true;
+            return true;
+        }
+
+        indexChanged[indexPath] = false;
+        return false;
     }
 }
