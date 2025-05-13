@@ -192,9 +192,10 @@ public:
                 if (updateNode != DOMEntity!string.init)
                 {
                     auto versionNode = findNode(updateNode, "Version");
+                    auto release = getAttribute(updateNode, "release", "1");
                     if (versionNode != DOMEntity!string.init)
                     {
-                        pkg.ver = nodeText(versionNode);
+                        pkg.ver = nodeText(versionNode) ~ "-" ~ release;
                     }
                 }
             }
