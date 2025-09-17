@@ -300,6 +300,10 @@ void Config::loadFromFile(
         backendName = "FreeBSD";
         backend = Backend::FreeBSD;
         metadataType = DataType::XML;
+    } else if (backendId == "solus") {
+        backendName = "Solus";
+        backend = Backend::Solus;
+        metadataType = DataType::XML;
     }
 
     // override the backend's default metadata type if requested by user
