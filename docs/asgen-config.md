@@ -69,7 +69,7 @@ Note that this example assume that your packages are located in directories
 | WorkspaceDir          | Explicitly set the location of the workspace. Only makes sense if the generator is meant to be used with a lot of configuration files and the configuration is passed to it via the `-c` flag. |
 | Icons                 | Customize the icon policy. See below for more details.                                                                                                                                         |
 | ImageFormat           | The image format that generated icons and screenshots are stored in. Can be one of `jxl` (JPEG-XL) or `png`. Individual suites can override this. *Default: `jxl`*                             |
-| MaxScreenshotFileSize | The maximum size of downloaded screenshot image or video files in MiB. `0` means unlimited. *Default: `14`*                                                                                    |
+| MaxScreenshotFileSize | The maximum size of downloaded screenshot image, video files or remote icons in MiB. `0` means unlimited. *Default: `14`*                                                                      |
 
 ### Suite fields
 
@@ -95,7 +95,7 @@ If no explicit value is set for a feature, the generator will pick its default v
 |----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | validateMetainfo           | Validate the AppStream upstream metadata. The validation is slow, but will produce better feedback and issue hints if enabled. *Default: `ON`*                                                                                                                                                |
 | processDesktop             | Process .desktop files which do not have a metainfo file. If disabled, all data without metainfo file will be ignored. *Default: `ON`*                                                                                                                                                        |
-| noDownloads                | Do not attempt any downloads. This will implicitly disable any handling of screenshots and possibly other features. Using this flag is discouraged. *Default: `OFF`*                                                                                                                          |
+| noDownloads                | Do not attempt any downloads. This will implicitly disable any handling of screenshots, remote icon downloads and possibly other features. Using this flag is discouraged. *Default: `OFF`*                                                                                                                          |
 | createScreenshotsStore     | Mirror screenshots and create thumbnails of them in `media/`. This will yield the best experience with software-centers, and also allow full control over which screenshots are displayed. Disabling this will make clients pull screenshots from 3rd-party upstream servers. *Default: `ON`* |
 | optimizePNGSize            | Use `optipng` to reduce the size of PNG images. Optipng needs to be installed. This has no effect on media generated as JPEG-XL. *Default: `ON`*                                                                                                                                              |
 | metadataTimestamps         | Write timestamps into generated metadata files. *Default: `ON`*                                                                                                                                                                                                                               |
@@ -120,6 +120,10 @@ Cached means an icon tarball is generated for the icon size that can be made ava
 cache of all icons exists. Icon sizes not mentioned, or with both `cached` and `remote` set to `false` will not be extracted.
 The `64x64` icon size must always be present and be cached. If this is not the case, appstream-generator will adjust the configuration internally and emit a warning.
 If no `Icons` field is present, appstream-generator will use a default policy for icons (creating cache tarballs for all sizes, and remote links for sizes >= 129x128px).
+
+Additionally, if a component's MetaInfo file declares a remote icon (an `<icon type="remote">` tag with a URL), the generator will download that icon and store it in the
+media export directory, like icons extracted from packages. This means the icon ends up in the generated icon tarballs as well (for icon sizes with `cached` set to `true`).
+Remote icon downloads are skipped if the `noDownloads` feature is enabled, and respect the `MaxScreenshotFileSize` limit.
 
 ### Selecting the media image format
 
