@@ -528,6 +528,17 @@ std::string IconHandler::stripIconExt(const std::string &iconName)
     return iconName;
 }
 
+std::string IconHandler::iconStoreName(const std::string &iconName)
+{
+    if (iconName.ends_with(".svgz"))
+        return iconName.substr(0, iconName.length() - 5) + ".png";
+    if (iconName.ends_with(".svg"))
+        return iconName.substr(0, iconName.length() - 4) + ".png";
+    if (iconName.ends_with(".xpm"))
+        return iconName.substr(0, iconName.length() - 4) + ".png";
+    return iconName;
+}
+
 bool IconHandler::storeIcon(
     AsComponent *cpt,
     GeneratorResult &gres,
@@ -553,12 +564,7 @@ bool IconHandler::storeIcon(
                         ? fs::path(iconPath).filename().string()
                         : std::format("{}_{}", gres.getPackage()->name(), fs::path(iconPath).filename().string());
 
-    if (iconName.ends_with(".svgz"))
-        iconName = iconName.substr(0, iconName.length() - 5) + ".png";
-    else if (iconName.ends_with(".svg"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
-    else if (iconName.ends_with(".xpm"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
+    iconName = iconStoreName(iconName);
 
     auto iconStoreLocation = path / iconName;
     if (fs::exists(iconStoreLocation)) {
@@ -851,12 +857,7 @@ bool IconHandler::storeRemoteIcon(
                         ? iconFname
                         : std::format("{}_{}", gres.getPackage()->name(), iconFname);
 
-    if (iconName.ends_with(".svgz"))
-        iconName = iconName.substr(0, iconName.length() - 5) + ".png";
-    else if (iconName.ends_with(".svg"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
-    else if (iconName.ends_with(".xpm"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
+    iconName = iconStoreName(iconName);
 
     // determine the intrinsic size of the icon, unless it's scalable
     auto iformat = asc_image_format_from_filename(iconFname.c_str());
