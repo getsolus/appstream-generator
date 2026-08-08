@@ -768,7 +768,7 @@ IconHandler::IconFindResult IconHandler::findIconScalableToSize(
     // AppStream's default icon size.
     // The clients can do that just as well, without us wasting disk space
     // and network bandwidth.
-    if (size.scale == 1 && size.width < 64)
+    if (size.width < 64)
         return info;
 
     // the size we want wasn't found, can we downscale a larger one?
