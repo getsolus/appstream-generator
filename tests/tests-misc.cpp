@@ -407,6 +407,67 @@ TEST_CASE("Utils: normalizePath", "[utils]")
     REQUIRE(normalizePath("/usr/test/..//") == "/usr");
 }
 
+TEST_CASE("Utils: componentGetRawIcon selects suitable icon", "[utils]")
+{
+    SECTION("Component with only a remote icon")
+    {
+        g_autoptr(AsComponent) cpt = as_component_new();
+        g_autoptr(AsIcon) icon = as_icon_new();
+        as_icon_set_kind(icon, AS_ICON_KIND_REMOTE);
+        as_icon_set_width(icon, 128);
+        as_icon_set_height(icon, 128);
+        as_icon_set_url(icon, "https://example.com/icon.png");
+        as_component_add_icon(cpt, icon);
+
+        auto raw = componentGetRawIcon(cpt);
+        REQUIRE(raw.has_value());
+        REQUIRE(as_icon_get_kind(raw.value()) == AS_ICON_KIND_REMOTE);
+        REQUIRE(std::string(as_icon_get_url(raw.value())) == "https://example.com/icon.png");
+    }
+
+    SECTION("Remote icon is only used as fallback")
+    {
+        g_autoptr(AsComponent) cpt = as_component_new();
+        g_autoptr(AsIcon) remoteIcon = as_icon_new();
+        as_icon_set_kind(remoteIcon, AS_ICON_KIND_REMOTE);
+        as_icon_set_url(remoteIcon, "https://example.com/icon.png");
+        as_component_add_icon(cpt, remoteIcon);
+
+        g_autoptr(AsIcon) localIcon = as_icon_new();
+        as_icon_set_kind(localIcon, AS_ICON_KIND_LOCAL);
+        as_icon_set_filename(localIcon, "/usr/share/pixmaps/foo.png");
+        as_component_add_icon(cpt, localIcon);
+
+        auto raw = componentGetRawIcon(cpt);
+        REQUIRE(raw.has_value());
+        REQUIRE(as_icon_get_kind(raw.value()) == AS_ICON_KIND_LOCAL);
+    }
+
+    SECTION("Stock icon has priority over all others")
+    {
+        g_autoptr(AsComponent) cpt = as_component_new();
+        g_autoptr(AsIcon) remoteIcon = as_icon_new();
+        as_icon_set_kind(remoteIcon, AS_ICON_KIND_REMOTE);
+        as_icon_set_url(remoteIcon, "https://example.com/icon.png");
+        as_component_add_icon(cpt, remoteIcon);
+
+        g_autoptr(AsIcon) stockIcon = as_icon_new();
+        as_icon_set_kind(stockIcon, AS_ICON_KIND_STOCK);
+        as_icon_set_name(stockIcon, "foo");
+        as_component_add_icon(cpt, stockIcon);
+
+        auto raw = componentGetRawIcon(cpt);
+        REQUIRE(raw.has_value());
+        REQUIRE(as_icon_get_kind(raw.value()) == AS_ICON_KIND_STOCK);
+    }
+
+    SECTION("Component without a suitable icon")
+    {
+        g_autoptr(AsComponent) cpt = as_component_new();
+        REQUIRE_FALSE(componentGetRawIcon(cpt).has_value());
+    }
+}
+
 TEST_CASE("Selectively reading tarball", "[zarchive]")
 {
     std::string archive = fs::path(getTestSamplesDir()) / "test.tar.xz";
