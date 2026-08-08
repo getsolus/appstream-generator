@@ -183,6 +183,32 @@ private:
         AscIconState targetState) const;
 
     /**
+     * Add the cached and/or remote icon entries for an icon that is (already)
+     * stored in the media export directory.
+     */
+    void addStoredIconEntries(
+        AsComponent *cpt,
+        GeneratorResult &gres,
+        const std::string &iconName,
+        const ImageSize &size,
+        AscIconState targetState) const;
+
+    /**
+     * Render and store the given icon data in the media export directory and
+     * register the icon with the component.
+     */
+    bool storeIconData(
+        AsComponent *cpt,
+        GeneratorResult &gres,
+        const fs::path &cptExportPath,
+        const std::string &iconName,
+        const std::string &iconFname,
+        const std::vector<std::uint8_t> &iconData,
+        const ImageSize &size,
+        AscIconState targetState,
+        const std::string &sourceFname) const;
+
+    /**
      * Helper function to try to find an icon that we can up- or downscale to the desired size.
      */
     IconFindResult findIconScalableToSize(
