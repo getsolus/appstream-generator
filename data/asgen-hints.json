@@ -43,6 +43,11 @@
   "severity": "error"
 },
 
+"icon-download-error": {
+  "text": "The remote icon '{{icon_url}}' could not be downloaded and cached: {{error}}",
+  "severity": "warning"
+},
+
 "pkg-extract-error": {
   "text": "Could not extract file '{{fname}}' from package '{{pkg_fname}}'. Error: {{error}}",
   "severity": "error"

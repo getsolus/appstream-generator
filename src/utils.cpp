@@ -349,6 +349,7 @@ fs::path getTestSamplesDir()
 std::optional<AsIcon *> componentGetRawIcon(AsComponent *cpt)
 {
     AsIcon *iconLocal = nullptr;
+    AsIcon *iconRemote = nullptr;
     GPtrArray *iconsArr = as_component_get_icons(cpt);
 
     for (guint i = 0; i < iconsArr->len; i++) {
@@ -358,11 +359,17 @@ std::optional<AsIcon *> componentGetRawIcon(AsComponent *cpt)
 
         if (as_icon_get_kind(icon) == AS_ICON_KIND_LOCAL)
             iconLocal = icon;
+        else if (as_icon_get_kind(icon) == AS_ICON_KIND_REMOTE)
+            iconRemote = icon;
     }
 
     // only return local icon if we had no stock icon
     if (iconLocal)
         return iconLocal;
+
+    // fall back to a remote icon, if no local icon is present
+    if (iconRemote)
+        return iconRemote;
 
     return std::nullopt;
 }

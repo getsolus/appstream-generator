@@ -128,7 +128,40 @@ private:
 
     void updateEnabledIconSizeList();
 
-    std::string getIconNameAndClear(AsComponent *cpt) const;
+    /**
+     * Describes the icon a component requests to be processed.
+     * Either a name (or absolute path) of a local icon, or the URL of a
+     * remote icon declared in the metadata.
+     */
+    struct IconRequest {
+        std::string name;
+        std::string url;
+        int width = -1;
+        int height = -1;
+    };
+
+    IconRequest getIconRequestAndClear(AsComponent *cpt) const;
+
+    /**
+     * Download the icon data for a remote icon declared in the metadata.
+     * Returns an empty vector if the icon could not be fetched or is not
+     * usable (in which case a hint is emitted).
+     */
+    std::vector<std::uint8_t> fetchRemoteIcon(
+        GeneratorResult &gres,
+        AsComponent *cpt,
+        const std::string &iconUrl) const;
+
+    /**
+     * Store a downloaded remote icon in the media export directory, in all
+     * suitable sizes of the icon policy, and register the icon with the component.
+     */
+    bool storeRemoteIcon(
+        GeneratorResult &gres,
+        AsComponent *cpt,
+        const fs::path &cptExportPath,
+        const std::string &iconUrl,
+        const std::vector<std::uint8_t> &iconData) const;
 
     /**
      * Generates potential filenames of the icon that is searched for in the
