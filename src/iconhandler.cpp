@@ -526,6 +526,18 @@ std::string IconHandler::stripIconExt(const std::string &iconName)
     return iconName;
 }
 
+std::string IconHandler::iconStoreName(GeneratorResult &gres, const std::string &iconFname) const
+{
+    // The rendered icon is always stored in the configured target format, no matter what
+    // the source format was. The target format is implied by the file extension we hand
+    // to the media worker.
+    const auto iconBasename = stripIconExt(fs::path(iconFname).filename().string());
+    const auto targetExt = asc_image_format_to_string(m_imageFormat);
+    return (gres.getPackage()->kind() == PackageKind::Fake)
+               ? std::format("{}.{}", iconBasename, targetExt)
+               : std::format("{}_{}.{}", gres.getPackage()->name(), iconBasename, targetExt);
+}
+
 bool IconHandler::storeIcon(
     AsComponent *cpt,
     GeneratorResult &gres,
@@ -554,11 +566,7 @@ bool IconHandler::storeIcon(
     // the stored icon is always rendered in our target format, no matter what the source was.
     // The format is implied by the file extension of the image target we hand to the media worker.
     const auto path = cptExportPath / "icons" / size.toString();
-    const auto iconBasename = stripIconExt(iconSrcFname);
-    const auto targetExt = asc_image_format_to_string(m_imageFormat);
-    const auto iconName = (gres.getPackage()->kind() == PackageKind::Fake)
-                              ? std::format("{}.{}", iconBasename, targetExt)
-                              : std::format("{}_{}.{}", gres.getPackage()->name(), iconBasename, targetExt);
+    const auto iconName = iconStoreName(gres, iconSrcFname);
 
     auto iconStoreLocation = path / iconName;
     if (fs::exists(iconStoreLocation)) {
@@ -838,16 +846,7 @@ bool IconHandler::storeRemoteIcon(
 {
     // this is the name the icon will be stored under in the media directory
     const auto iconFname = Utils::filenameFromURI(iconUrl);
-    auto iconName = (gres.getPackage()->kind() == PackageKind::Fake)
-                        ? iconFname
-                        : std::format("{}_{}", gres.getPackage()->name(), iconFname);
-
-    if (iconName.ends_with(".svgz"))
-        iconName = iconName.substr(0, iconName.length() - 5) + ".png";
-    else if (iconName.ends_with(".svg"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
-    else if (iconName.ends_with(".xpm"))
-        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
+    const auto iconName = iconStoreName(gres, iconFname);
 
     // determine the intrinsic size of the icon, unless it's scalable
     auto iformat = asc_image_format_from_filename(iconFname.c_str());

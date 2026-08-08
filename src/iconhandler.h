@@ -210,6 +210,13 @@ private:
     static std::string stripIconExt(const std::string &iconName);
 
     /**
+     * Convert a source icon file name to the name the rendered icon is
+     * stored under in the media export directory. The icon is always rendered
+     * in the configured target image format.
+     */
+    std::string iconStoreName(GeneratorResult &gres, const std::string &iconFname) const;
+
+    /**
      * Extracts the icon from the package and stores it in the cache.
      * Ensures the stored icon always has the size given in "size", and renders
      * scalable vectorgraphics if necessary.
