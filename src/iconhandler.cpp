@@ -411,9 +411,9 @@ void IconHandler::updateEnabledIconSizeList()
         m_enabledIconSizes.emplace_back(iconSizeInt, iconSizeInt, iconScale);
 }
 
-std::string IconHandler::getIconNameAndClear(AsComponent *cpt) const
+IconHandler::IconRequest IconHandler::getIconRequestAndClear(AsComponent *cpt) const
 {
-    std::string name;
+    IconRequest req;
 
     // compose leaves the unprocessed icon reference on the component for us, because we
     // set ASC_COMPOSE_FLAG_IGNORE_ICONS and do our own icon processing
@@ -422,11 +422,17 @@ std::string IconHandler::getIconNameAndClear(AsComponent *cpt) const
         if (as_icon_get_kind(icon) == AS_ICON_KIND_LOCAL) {
             const auto filename = as_icon_get_filename(icon);
             if (filename)
-                name = filename;
+                req.name = filename;
+        } else if (as_icon_get_kind(icon) == AS_ICON_KIND_REMOTE) {
+            const auto url = as_icon_get_url(icon);
+            if (url)
+                req.url = url;
+            req.width = as_icon_get_width(icon);
+            req.height = as_icon_get_height(icon);
         } else {
             const auto iconName = as_icon_get_name(icon);
             if (iconName)
-                name = iconName;
+                req.name = iconName;
         }
     }
 
@@ -435,7 +441,7 @@ std::string IconHandler::getIconNameAndClear(AsComponent *cpt) const
     if (iconsArray->len > 0)
         g_ptr_array_remove_range(iconsArray, 0, iconsArray->len);
 
-    return name;
+    return req;
 }
 
 bool IconHandler::iconAllowed(const std::string &iconName)
@@ -768,6 +774,192 @@ bool IconHandler::storeIconData(
     return true;
 }
 
+std::vector<std::uint8_t> IconHandler::fetchRemoteIcon(
+    GeneratorResult &gres,
+    AsComponent *cpt,
+    const std::string &iconUrl) const
+{
+    const auto &conf = Config::get();
+
+    // check that the icon file format is one we can process
+    const auto iconFname = Utils::filenameFromURI(iconUrl);
+    if (!iconAllowed(iconFname)) {
+        gres.addHint(
+            as_component_get_id(cpt),
+            "icon-format-unsupported",
+            {
+                {"icon_fname", iconFname}
+        });
+        return {};
+    }
+
+    if (conf.feature.noDownloads) {
+        LOG_DEBUG(m_log, "Not downloading remote icon '{}': downloads are disabled.", iconUrl);
+        return {};
+    }
+
+    LOG_DEBUG(m_log, "Downloading remote icon '{}'", iconUrl);
+    std::vector<std::uint8_t> iconData;
+    try {
+        iconData = Utils::getFileContents(iconUrl);
+    } catch (const std::exception &e) {
+        gres.addHint(
+            cpt,
+            "icon-download-error",
+            {
+                {"icon_url", iconUrl},
+                {"error",     e.what()}
+        });
+        return {};
+    }
+
+    // enforce a maximum file size, to protect against broken or malicious servers
+    if (conf.maxScrFileSize > 0 && iconData.size() > static_cast<std::uint64_t>(conf.maxScrFileSize) * 1024 * 1024) {
+        gres.addHint(
+            cpt,
+            "icon-download-error",
+            {
+                {"icon_url", iconUrl},
+                {"error",    "Icon file is too large."}
+        });
+        return {};
+    }
+
+    return iconData;
+}
+
+bool IconHandler::storeRemoteIcon(
+    GeneratorResult &gres,
+    AsComponent *cpt,
+    AscMedia *media,
+    const fs::path &cptExportPath,
+    const std::string &iconUrl,
+    const std::vector<std::uint8_t> &iconData) const
+{
+    // this is the name the icon will be stored under in the media directory
+    const auto iconFname = Utils::filenameFromURI(iconUrl);
+    auto iconName = (gres.getPackage()->kind() == PackageKind::Fake)
+                        ? iconFname
+                        : std::format("{}_{}", gres.getPackage()->name(), iconFname);
+
+    if (iconName.ends_with(".svgz"))
+        iconName = iconName.substr(0, iconName.length() - 5) + ".png";
+    else if (iconName.ends_with(".svg"))
+        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
+    else if (iconName.ends_with(".xpm"))
+        iconName = iconName.substr(0, iconName.length() - 4) + ".png";
+
+    // determine the intrinsic size of the icon, unless it's scalable
+    auto iformat = asc_image_format_from_filename(iconFname.c_str());
+    const bool isScalable = (iformat == ASC_IMAGE_FORMAT_SVG) || (iformat == ASC_IMAGE_FORMAT_SVGZ);
+
+    std::uint32_t intrinsicWidth = 0;
+    std::uint32_t intrinsicHeight = 0;
+    if (!isScalable) {
+        // Images are only ever decoded by the media worker, so process the image
+        // once at its native size to learn its intrinsic dimensions.
+        g_autoptr(GBytes) iconBytes = g_bytes_new(iconData.data(), iconData.size());
+        g_autoptr(AscImageSource) imgSource = asc_image_source_new(iconBytes);
+
+        g_autoptr(GError) error = nullptr;
+        g_autofree gchar *probeDir = g_dir_make_tmp("asgen-icon-probe-XXXXXX", &error);
+        if (probeDir == nullptr) {
+            gres.addHint(
+                cpt,
+                "icon-download-error",
+                {
+                    {"icon_url", iconUrl},
+                    {"error",     error ? error->message : "Could not create a temporary directory."}
+            });
+            return false;
+        }
+
+        g_autoptr(GPtrArray) probeTargets = g_ptr_array_new_with_free_func((GDestroyNotify)asc_image_target_free);
+        g_ptr_array_add(probeTargets, asc_image_target_new("probe.png", ASC_IMAGE_SCALE_MODE_NONE, 0, 0));
+
+        const gboolean probeOk = asc_media_process_image(media, imgSource, probeTargets, probeDir, nullptr, &error);
+        fs::remove_all(fs::path(probeDir));
+
+        if (!probeOk) {
+            gres.addHint(
+                cpt,
+                "icon-download-error",
+                {
+                    {"icon_url", iconUrl},
+                    {"error",     error ? error->message : "Could not parse icon image data."}
+            });
+            return false;
+        }
+
+        intrinsicWidth = asc_image_source_get_width(imgSource);
+        intrinsicHeight = asc_image_source_get_height(imgSource);
+    }
+
+    // store the icon in all suitable sizes of the icon policy
+    bool storedAny = false;
+    AscIconPolicyIter policyIter;
+    asc_icon_policy_iter_init(&policyIter, m_iconPolicy);
+
+    guint iconSizeInt, iconScale;
+    AscIconState iconState;
+    while (asc_icon_policy_iter_next(&policyIter, &iconSizeInt, &iconScale, &iconState)) {
+        if (iconState == ASC_ICON_STATE_IGNORED)
+            continue;
+
+        const ImageSize size(iconSizeInt, iconSizeInt, iconScale);
+        const auto iconStoreLocation = cptExportPath / "icons" / size.toString() / iconName;
+
+        // the icon is already stored, just add it to the component
+        if (fs::exists(iconStoreLocation)) {
+            addStoredIconEntries(cpt, gres, iconName, size, iconState);
+            storedAny = true;
+            continue;
+        }
+
+        if (!isScalable) {
+            const auto scaled = size.width * size.scale;
+
+            // never scale to a size below the default icon size, the clients can
+            // do that just as well (only a native icon of that size is accepted)
+            if (size.width < m_defaultIconSize.width) {
+                if (scaled != intrinsicWidth || scaled != intrinsicHeight)
+                    continue;
+            } else if (scaled > intrinsicWidth || scaled > intrinsicHeight) {
+                // upscaling is only acceptable for the default icon size, and
+                // only if the icon is not too small
+                if (!(size == m_defaultIconSize && m_allowIconUpscaling && intrinsicWidth >= 48
+                      && intrinsicHeight >= 48))
+                    continue;
+            }
+        }
+
+        if (storeIconData(cpt, gres, media, cptExportPath, iconName, iconFname, iconData, size, iconState, iconUrl))
+            storedAny = true;
+    }
+
+    if (!storedAny) {
+        if (!isScalable && intrinsicWidth > 0) {
+            gres.addHint(
+                cpt,
+                "icon-too-small",
+                {
+                    {"icon_name", iconName},
+                    {"icon_size", std::format("{}x{}", intrinsicWidth, intrinsicHeight)}
+            });
+        } else {
+            gres.addHint(
+                cpt,
+                "icon-not-found",
+                {
+                    {"icon_fname", iconFname}
+            });
+        }
+        return false;
+    }
+
+    return true;
+}
+
 IconHandler::IconFindResult IconHandler::findIconScalableToSize(
     const std::unordered_map<ImageSize, IconFindResult> &possibleIcons,
     const ImageSize &size) const
@@ -810,8 +1002,6 @@ IconHandler::IconFindResult IconHandler::findIconScalableToSize(
 
 bool IconHandler::process(GeneratorResult &gres, AsComponent *cpt, AscMedia *media)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
     // we don't touch fonts unless those didn't have their icon
     // rendered from the font itself already
     if (as_component_get_kind(cpt) == AS_COMPONENT_KIND_FONT) {
@@ -824,9 +1014,9 @@ bool IconHandler::process(GeneratorResult &gres, AsComponent *cpt, AscMedia *med
         }
     }
 
-    auto iconName = getIconNameAndClear(cpt);
+    auto iconReq = getIconRequestAndClear(cpt);
     // nothing to do if there is no icon
-    if (iconName.empty())
+    if (iconReq.name.empty() && iconReq.url.empty())
         return true;
 
     auto gcid = gres.gcidForComponent(cpt);
@@ -844,6 +1034,23 @@ bool IconHandler::process(GeneratorResult &gres, AsComponent *cpt, AscMedia *med
         return false;
     }
 
+    // If the metadata declares a remote icon, download it before taking the
+    // icon-processing lock, so that slow network access does not serialize
+    // icon processing of all other packages.
+    if (!iconReq.url.empty()) {
+        auto remoteIconData = fetchRemoteIcon(gres, cpt, iconReq.url);
+        if (remoteIconData.empty()) {
+            // naught to do
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return storeRemoteIcon(gres, cpt, media, cptMediaPath, iconReq.url, remoteIconData);
+    }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto iconName = std::move(iconReq.name);
     if (iconName.starts_with("/")) {
         LOG_DEBUG(m_log, "Looking for icon '{}' for '{}::{}' (path)", iconName, gres.pkid(), as_component_get_id(cpt));
 
