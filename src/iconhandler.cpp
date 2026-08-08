@@ -558,33 +558,7 @@ bool IconHandler::storeIcon(
     if (fs::exists(iconStoreLocation)) {
         // we already extracted that icon, skip the extraction step
         // and just add the new icon.
-        if (targetState != ASC_ICON_STATE_REMOTE_ONLY) {
-            g_autoptr(AsIcon) icon = as_icon_new();
-            as_icon_set_kind(icon, AS_ICON_KIND_CACHED);
-            as_icon_set_width(icon, size.width);
-            as_icon_set_height(icon, size.height);
-            as_icon_set_scale(icon, size.scale);
-            as_icon_set_name(icon, iconName.c_str());
-            as_component_add_icon(cpt, icon);
-        }
-        if (targetState != ASC_ICON_STATE_CACHED_ONLY && m_allowRemoteIcons) {
-            auto gcid = gres.gcidForComponent(cpt);
-            if (gcid.empty()) {
-                gres.addHint(
-                    cpt, "internal-error", "No global ID could be found for the component, could not add remote icon.");
-                return true;
-            }
-            auto remoteIconUrl = fs::path(gcid) / "icons" / size.toString() / iconName;
-
-            g_autoptr(AsIcon) icon = as_icon_new();
-            as_icon_set_kind(icon, AS_ICON_KIND_REMOTE);
-            as_icon_set_width(icon, size.width);
-            as_icon_set_height(icon, size.height);
-            as_icon_set_scale(icon, size.scale);
-            as_icon_set_url(icon, remoteIconUrl.string().c_str());
-            as_component_add_icon(cpt, icon);
-        }
-
+        addStoredIconEntries(cpt, gres, iconName, size, targetState);
         return true;
     }
 
@@ -615,6 +589,79 @@ bool IconHandler::storeIcon(
         });
         return false;
     }
+
+    return storeIconData(
+        cpt,
+        gres,
+        media,
+        cptExportPath,
+        iconName,
+        iconPath,
+        iconData,
+        size,
+        targetState,
+        fs::path(sourcePkg->getFilename()).filename().string());
+}
+
+void IconHandler::addStoredIconEntries(
+    AsComponent *cpt,
+    GeneratorResult &gres,
+    const std::string &iconName,
+    const ImageSize &size,
+    AscIconState targetState) const
+{
+    if (targetState != ASC_ICON_STATE_REMOTE_ONLY) {
+        g_autoptr(AsIcon) icon = as_icon_new();
+        as_icon_set_kind(icon, AS_ICON_KIND_CACHED);
+        as_icon_set_width(icon, size.width);
+        as_icon_set_height(icon, size.height);
+        as_icon_set_scale(icon, size.scale);
+        as_icon_set_name(icon, iconName.c_str());
+        as_component_add_icon(cpt, icon);
+    }
+    if (targetState != ASC_ICON_STATE_CACHED_ONLY && m_allowRemoteIcons) {
+        auto gcid = gres.gcidForComponent(cpt);
+        if (gcid.empty()) {
+            gres.addHint(
+                cpt, "internal-error", "No global ID could be found for the component, could not add remote icon.");
+            return;
+        }
+        auto remoteIconUrl = fs::path(gcid) / "icons" / size.toString() / iconName;
+
+        g_autoptr(AsIcon) icon = as_icon_new();
+        as_icon_set_kind(icon, AS_ICON_KIND_REMOTE);
+        as_icon_set_width(icon, size.width);
+        as_icon_set_height(icon, size.height);
+        as_icon_set_scale(icon, size.scale);
+        as_icon_set_url(icon, remoteIconUrl.string().c_str());
+        as_component_add_icon(cpt, icon);
+    }
+}
+
+bool IconHandler::storeIconData(
+    AsComponent *cpt,
+    GeneratorResult &gres,
+    AscMedia *media,
+    const fs::path &cptExportPath,
+    const std::string &iconName,
+    const std::string &iconFname,
+    const std::vector<std::uint8_t> &iconData,
+    const ImageSize &size,
+    AscIconState targetState,
+    const std::string &sourceFname) const
+{
+    auto iformat = asc_image_format_from_filename(iconFname.c_str());
+    if (iformat == ASC_IMAGE_FORMAT_UNKNOWN) {
+        gres.addHint(
+            as_component_get_id(cpt),
+            "icon-format-unsupported",
+            {
+                {"icon_fname", fs::path(iconFname).filename()}
+        });
+        return false;
+    }
+
+    auto path = cptExportPath / "icons" / size.toString();
 
     auto scaled_width = (int)size.width * (int)size.scale;
     auto scaled_height = (int)size.height * (int)size.scale;
@@ -667,9 +714,9 @@ bool IconHandler::storeIcon(
             as_component_get_id(cpt),
             asc_media_error_is_worker_failure(error) ? "media-worker-process-error" : "image-write-error",
             {
-                {"fname",     iconSrcFname                                 },
-                {"pkg_fname", fs::path(sourcePkg->getFilename()).filename()},
-                {"error",     error->message                               }
+                {"fname",     iconFname  },
+                {"pkg_fname", sourceFname},
+                {"error",     error->message}
         });
         dropEmptyIconDir();
         return false;
@@ -685,7 +732,7 @@ bool IconHandler::storeIcon(
             cpt,
             "icon-too-small",
             {
-                {"icon_name", iconSrcFname},
+                {"icon_name", iconFname},
                 {"icon_size", std::format("{}x{}", srcWidth, srcHeight)}
         });
         dropEmptyIconDir();
@@ -697,8 +744,8 @@ bool IconHandler::storeIcon(
             cpt,
             "image-write-error",
             {
-                {"fname",     iconSrcFname                                 },
-                {"pkg_fname", fs::path(sourcePkg->getFilename()).filename()},
+                {"fname",     iconFname  },
+                {"pkg_fname", sourceFname},
                 {"error",     asc_image_target_get_error_message(imgTarget)}
         });
         dropEmptyIconDir();
@@ -711,39 +758,13 @@ bool IconHandler::storeIcon(
             cpt,
             "icon-scaled-up",
             {
-                {"icon_name", iconSrcFname},
+                {"icon_name", iconFname},
                 {"icon_size", std::format("{}x{}", srcWidth, srcHeight)},
                 {"scale_size", size.toString()}
         });
     }
 
-    if (targetState != ASC_ICON_STATE_REMOTE_ONLY) {
-        g_autoptr(AsIcon) icon = as_icon_new();
-        as_icon_set_kind(icon, AS_ICON_KIND_CACHED);
-        as_icon_set_width(icon, size.width);
-        as_icon_set_height(icon, size.height);
-        as_icon_set_scale(icon, size.scale);
-        as_icon_set_name(icon, iconName.c_str());
-        as_component_add_icon(cpt, icon);
-    }
-    if (targetState != ASC_ICON_STATE_CACHED_ONLY && m_allowRemoteIcons) {
-        auto gcid = gres.gcidForComponent(cpt);
-        if (gcid.empty()) {
-            gres.addHint(
-                cpt, "internal-error", "No global ID could be found for the component, could not add remote icon.");
-            return true;
-        }
-        auto remoteIconUrl = fs::path(gcid) / "icons" / size.toString() / iconName;
-
-        g_autoptr(AsIcon) icon = as_icon_new();
-        as_icon_set_kind(icon, AS_ICON_KIND_REMOTE);
-        as_icon_set_width(icon, size.width);
-        as_icon_set_height(icon, size.height);
-        as_icon_set_scale(icon, size.scale);
-        as_icon_set_url(icon, remoteIconUrl.string().c_str());
-        as_component_add_icon(cpt, icon);
-    }
-
+    addStoredIconEntries(cpt, gres, iconName, size, targetState);
     return true;
 }
 
